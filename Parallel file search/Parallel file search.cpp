@@ -13,6 +13,20 @@ typedef struct {
     char substring[256];
 } ThreadArgs;
 
+void print_colored(const char* text, WORD color) {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
+    WORD saved_attributes;
+
+    // Сохраняем текущий цвет
+    GetConsoleScreenBufferInfo(hConsole, &consoleInfo);
+    saved_attributes = consoleInfo.wAttributes;
+
+    SetConsoleTextAttribute(hConsole, color);
+    printf("%s", text);
+    SetConsoleTextAttribute(hConsole, saved_attributes); // Возвращаем стандартный цвет
+}
+
 
 DWORD WINAPI search_in_file_thread(LPVOID param) {
     ThreadArgs* args = (ThreadArgs*)param;
@@ -27,17 +41,69 @@ DWORD WINAPI search_in_file_thread(LPVOID param) {
 
     char line[MAX_LINE_LENGTH];
     int line_number = 1;
+    int found_any = 0;
+    LARGE_INTEGER start, end, freq;
+    QueryPerformanceFrequency(&freq);
+
+    char full_output[4096] = "";
+    char temp[512];
+
+    QueryPerformanceCounter(&start);
 
     while (fgets(line, sizeof(line), file)) {
-        if (strstr(line, args->substring)) {
-            EnterCriticalSection(&print_lock);
-            printf("[MATCH] %s (line %d): %s \n\n", args->filepath, line_number, line);
-            LeaveCriticalSection(&print_lock);
+        char* match = strstr(line, args->substring);
+
+        if (match) {
+            found_any = 1;
+
+            char* sentence_start = match;
+            while (sentence_start > line && !strchr(".!?", *(sentence_start - 1))) {
+                sentence_start--;
+            }
+
+            char* sentence_end = match;
+            while (*sentence_end && !strchr(".!?", *sentence_end)) {
+                sentence_end++;
+            }
+            if (*sentence_end) sentence_end++;
+
+            char sentence[MAX_LINE_LENGTH];
+            int len = (int)(sentence_end - sentence_start);
+            if (len > MAX_LINE_LENGTH - 1) len = MAX_LINE_LENGTH - 1;
+            strncpy_s(sentence, sizeof(sentence), sentence_start, len);
+            sentence[len] = '\0';
+
+            // Формируем вывод
+            strcat_s(full_output, sizeof(full_output), "=============================================================\n");
+
+            sprintf_s(temp, sizeof(temp), "FILE: %s\n", args->filepath);
+            strcat_s(full_output, sizeof(full_output), temp);
+
+            sprintf_s(temp, sizeof(temp), "MATCH (line %d): %s\n", line_number, sentence);
+            strcat_s(full_output, sizeof(full_output), temp);
         }
+
         line_number++;
     }
 
     fclose(file);
+
+    if (found_any) {
+        QueryPerformanceCounter(&end);
+        double elapsed = (double)(end.QuadPart - start.QuadPart) * 1000.0 / freq.QuadPart;
+
+        sprintf_s(temp, sizeof(temp), "Time: %.2f ms\n", elapsed);
+        strcat_s(full_output, sizeof(full_output), temp);
+
+        strcat_s(full_output, sizeof(full_output), "=============================================================\n\n");
+
+        // Единый вывод защищённый
+        EnterCriticalSection(&print_lock);
+        print_colored(full_output, 7);
+        LeaveCriticalSection(&print_lock);
+    }
+
+
     return 0;
 }
 
